@@ -250,43 +250,116 @@ const blowfish_decrypt = function(cipher_buffer: buffer, provided_key_buffer: bu
 	end;
 	return decrypted_buffer;
 end;
-do
-	const plain_text_buffer: buffer = buffer.fromstring("when she blows on my fish 😳");
-	const key_buffer: buffer = buffer.fromstring("c1b9b00925c6b8e093adec92d98dc75771bc3a84b65e1e0abed6c848c9aae33d");
+const testing_suite = function(): ()
+	local passed_tests_uint8: number = 0;
+	local failed_tests_uint8: number = 0;
+	const key_str: string = "564e61fde7e3d1ef13d289265fd62f6c";
+	const plain_text_str = "when she blows on my fish 😳";
+	const key_buffer: buffer = buffer.fromstring(key_str);
+	const plain_text_buffer: buffer = buffer.fromstring(plain_text_str);
 	const cipher_buffer: buffer = blowfish_encrypt(plain_text_buffer, key_buffer);
-	warn("cipher", buffer.tostring(cipher_buffer));
-	const decrypted_buffer: buffer = blowfish_decrypt(cipher_buffer, key_buffer);
-	warn("decrypted", buffer.tostring(decrypted_buffer));
-	const failed_decryption_buffer: buffer = blowfish_decrypt(cipher_buffer, buffer.fromstring("this is a very wrong key :C"));
-	warn("failed decrypt", buffer.tostring(failed_decryption_buffer));
-end;
-
-
-
--- other test thingies:
-
---[[do
-	const key_buffer: buffer = buffer.fromstring("c1b9b00925c6b8e093adec92d98dc75771bc3a84b65e1e0abed6c848c9aae33d");
-	const message_buffer: buffer = buffer.fromstring("this is a secret message");
-	const cipher_buffer: buffer = blowfish_encrypt(message_buffer, key_buffer);
-	print("cipher buffer", buffer.tostring(cipher_buffer));	
-	const decrypted_buffer: buffer = blowfish_decrypt(cipher_buffer);
-	print("decrypted", buffer.tostring(decrypted_buffer));
-	warn("k after?");
-	const key_buffer: buffer = buffer.fromstring("c1b9b00925c6b8e093adec92d98dc75771bc3a84b65e1e0abed6c848c9aae33d");
-	const message_buffer: buffer = buffer.fromstring("this is a NEW secret message");
-	const cipher_buffer: buffer = blowfish_encrypt(message_buffer, key_buffer);
-	print("cipher buffer", buffer.tostring(cipher_buffer));	
-	const decrypted_buffer: buffer = blowfish_decrypt(cipher_buffer);
-	print("decrypted", buffer.tostring(decrypted_buffer));
-end;]]
---[[do
-	local left_block_uint32: number = 0x12345678;
-	local right_block_uint32: number = 0x9ABCDEF0;
-	local start_time: number = os.clock();
-	for _: number = 1, 10_000_000 do
-		left_block_uint32, right_block_uint32 = blowfish_encrypt_block(left_block_uint32, right_block_uint32);
+	const test_handler = function(test_name_str: string, func: (...any) -> (...any)): ()
+		const succ: boolean, response: any = pcall(func);
+		if (succ) then
+			passed_tests_uint8 += 1;
+			print("Passed", test_name_str);
+		else
+			warn("Failed", test_name_str, response);
+		end;
+		return;
 	end;
-	print(os.clock() - start_time);
-	-- 6.128939000000173, could be improved some time
-end;]]
+	test_handler("Off-By-One Errors Test", function(): ()
+		const off_by_one_str: string = "564e61fde7e3d1ef13d289265fd62f6E";
+		const decrypted_buffer: buffer = blowfish_decrypt(cipher_buffer, buffer.fromstring(off_by_one_str));
+		assert(buffer.tostring(decrypted_buffer) ~= plain_text_str, "OBO key returned the plain text");
+		return;
+	end);
+	test_handler("Padding Test", function(): ()
+		const str: string = "\0";
+		const cipher_buffer: buffer = blowfish_encrypt(buffer.fromstring(str), key_buffer);
+		const buffer_size: number = sizeof(cipher_buffer);
+		assert(buffer_size == 8, "padding incorrectly padded a string with a null-byte [1]");
+		warn(buffer.tostring(cipher_buffer))
+		const byte: number = buffer.readu8(cipher_buffer, 2);
+		assert(string.char(byte) ~= "/", "padding incorectly padded a string with a null-byte [2]");
+		const a: buffer = blowfish_encrypt(buffer.fromstring("A"), key_buffer);
+		const b: buffer = blowfish_encrypt(buffer.fromstring("B"), key_buffer);
+		assert(buffer.tostring(a) ~= buffer.tostring(b), "single-byte input with different content should not produce the same cipher text after padding");
+		const a: buffer = blowfish_encrypt(buffer.fromstring("AAAAAAAA"), key_buffer);
+		const b: buffer = blowfish_encrypt(buffer.fromstring("BBBBBBBB"), key_buffer);
+		assert(buffer.tostring(a) ~= buffer.tostring(b), "different 8-byte input with no padding should not produece the same cipher text");		
+		return;
+	end);
+	test_handler("Slide Attack", function(): ()
+		const plain_text_buffer: buffer = buffer.fromstring("AAAAAAAA");
+		const key_buffer_a: buffer = buffer.fromstring("VERRY VERY SECURE KEY 1");
+		const key_buffer_b: buffer = buffer.fromstring("VERY VERY VERY SECURE KEY 2");
+		const cipher_text_a: buffer = blowfish_encrypt(plain_text_buffer, key_buffer_a);
+		const cipher_text_b: buffer = blowfish_encrypt(plain_text_buffer, key_buffer_b);
+		assert(buffer.tostring(cipher_text_a) ~= buffer.tostring(cipher_text_b), "weak key schedule detected");
+		const cipher_text_d: buffer = blowfish_encrypt(plain_text_buffer, key_buffer);
+		assert(buffer.tostring(cipher_text_d) ~= buffer.tostring(cipher_text_a), "the key collides with key A");
+		assert(buffer.tostring(cipher_text_d) ~= buffer.tostring(cipher_text_b), "the key collides with key B");
+		const key_buffer_c: buffer = buffer.fromstring("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+		const cipher_text_e: buffer = blowfish_encrypt(plain_text_buffer, key_buffer_c);
+		assert(buffer.tostring(cipher_text_d) ~= buffer.tostring(cipher_text_e), "key collides with all bytes");
+		assert(buffer.tostring(cipher_text_a) ~= buffer.tostring(cipher_text_e), "keys prodeuced the same cipher text");
+		return;
+	end);
+	test_handler("Block Collision Attack", function(): ()
+		const cached_blocks: {[string]: boolean} = {};
+		for i: number = 0, 255 do
+			const plain_text_buffer: buffer = buffer.create(8);
+			buffer.writeu8(plain_text_buffer, 0, i);
+			buffer.fill(plain_text_buffer, 1, 0xFFF);
+			const cipher_text_buffer: buffer = blowfish_encrypt(plain_text_buffer, key_buffer);
+			const cipher_text_str: string = buffer.tostring(cipher_text_buffer);
+			assert(not cached_blocks[cipher_text_str], "block collision detected");
+			cached_blocks[cipher_text_str] = true;
+		end;
+		return;
+	end);
+	test_handler("Cryptanalysis Attack", function(): ()
+		--[[const plain_text_buffer: buffer = buffer.fromstring("blehehkjerhqhkjhfelfhw2q8fywiufqw hi");
+		const key_buffer: buffer = buffer.fromstring("84cfeecc0326bccbc7a8d8aa91029497aa3f25ac27663086065c0b6133836cbe");
+		const cipher_buffer: buffer = blowfish_encrypt(plain_text_buffer, key_buffer);]]
+		const plain_text_buffer_one: buffer = buffer.fromstring("mreow at 3am");
+		const plain_text_buffer_two: buffer = buffer.fromstring("no mreow at 4am");
+		const cipher_text_one: buffer = blowfish_encrypt(plain_text_buffer_one, key_buffer);
+		const cipher_text_two: buffer = blowfish_encrypt(plain_text_buffer_two, key_buffer);
+		const a: number = bit32.bxor(buffer.readu32(plain_text_buffer_one, 0), buffer.readu32(plain_text_buffer_two, 0));
+		const b: number = bit32.bxor(buffer.readu32(cipher_text_one, 0), buffer.readu32(cipher_text_two, 0));
+		const c: number = bit32.bxor(buffer.readu32(plain_text_buffer_one, 4), buffer.readu32(plain_text_buffer_two, 4));
+		const d: number = bit32.bxor(buffer.readu32(cipher_text_one, 4), buffer.readu32(cipher_text_two, 4));
+		assert(a ~= b, "XOR is preserved in low word");
+		assert(c ~= d, "XOR is preserved in high word");
+		assert(b ~= 0, "Low XOR of cipher texts is 0");
+		assert(d ~= 0, "high XOR of cipher texts is 0");
+		return;
+	end);
+	test_handler("Known Plain-Text Attack", function(): ()
+		const plain_texts: {[number]: buffer} = {buffer.fromstring("hi"), buffer.fromstring("uwu"), buffer.fromstring("badd"), buffer.fromstring("nuuu:C")};
+		const cipher_texts: {[number]: buffer} = {};
+		for _: unknown, v: buffer in plain_texts do
+			table.insert(cipher_texts, blowfish_encrypt(v, key_buffer));
+		end;
+		const cipher_text: buffer = blowfish_encrypt(buffer.fromstring("bad"), key_buffer);
+		const a: number = buffer.readu32(cipher_text, 0);
+		const b: number = buffer.readu32(cipher_text, 4);
+		for i: number = 1, #cipher_texts do
+			for j: number = (i + 1), #cipher_texts do
+				const d: number = bit32.bxor(buffer.readu32(cipher_texts[i], 0), buffer.readu32(cipher_texts[j], 0));
+				const e: number = bit32.bxor(buffer.readu32(cipher_texts[i], 4), buffer.readu32(cipher_texts[j], 4));
+				assert(d ~= a or e ~= b, `XOR of cipher text preidcted the target's cipher text`);
+				assert(buffer.tostring(cipher_texts[i]) ~= buffer.tostring(cipher_text), "cipher text is the same as the target's ciphe r text")
+			end;
+		end;
+		return;
+	end);
+	warn("Tests passed:", passed_tests_uint8);
+	warn("Failed tests:", failed_tests_uint8);
+	return;
+end;
+testing_suite();
+
+
