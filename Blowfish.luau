@@ -2,12 +2,12 @@
 --!native
 --!optimize 2
 -- TODO: optimizations and clean-ups
-const pbox: {[number]: number} = {
+const constant_pbox: {[number]: number} = {
 	0x243F6A88,0x85A308D3,0x13198A2E,0x03707344,0xA4093822,0x299F31D0,0x082EFA98,0xEC4E6C89,
 	0x452821E6,0x38D01377,0xBE5466CF,0x34E90C6C,0xC0AC29B7,0xC97C50DD,0x3F84D5B5,0xB5470917,
 	0x9216D5D9,0x8979FB1B
 };
-const sbox: {[number]: {[number]: number}} = {
+const constant_sbox: {[number]: {[number]: number}} = {
 	{
 		0xD1310BA6,0x98DFB5AC,0x2FFD72DB,0xD01ADFB7,0xB8E1AFED,0x6A267E96,0xBA7C9045,0xF12C7F99,
 		0x24A19947,0xB3916CF7,0x0801F2E2,0x858EFC16,0x636920D8,0x71574E69,0xA458FEA3,0xF4933D7E,
@@ -146,7 +146,7 @@ const sbox: {[number]: {[number]: number}} = {
 	}
 };
 const sizeof: (buffer) -> number = buffer.len;
-const blowfish_key_schdule = function(key_buffer: buffer): ()
+const blowfish_key_schdule = function(pbox: {[number]: number}, key_buffer: buffer): ()
 	local j: number = 0;
 	const key_buffer_size: number = sizeof(key_buffer);
 	for i: number = 1, #pbox do
@@ -162,21 +162,17 @@ end;
 const add_modu32 = function(a: number, b: number): number -- TODO: inline this
 	return (a + b) % 0x100000000;
 end;
-const blowfish_fistel_function = function(block_uint8: number): number
-	local a: number = (bit32.band(bit32.rshift(block_uint8, 24), 0xFF) + 1);
+const blowfish_fistel_function = function(sbox: {[number]: {[number]: number}}, block_uint8: number): number
+	const a: number = (bit32.band(bit32.rshift(block_uint8, 24), 0xFF) + 1);
 	const b: number = (bit32.band(bit32.rshift(block_uint8, 16), 0xFF) + 1);
 	const c: number = (bit32.band(bit32.rshift(block_uint8, 8), 0xFF) + 1);
 	const d: number = (bit32.band(block_uint8, 0xFF) + 1);
-	local y: number = add_modu32(sbox[1][a], sbox[2][b]); 
-	--[[y = bit32.bxor(y, sbox[3][c]);
-	y = add_modu32(y, sbox[4][d]);]] -- this is ugly
-	y = add_modu32(bit32.bxor(y, sbox[3][c]), sbox[4][d]);
-	return y;
+	return add_modu32(bit32.bxor(add_modu32(sbox[1][a], sbox[2][b]), sbox[3][c]), sbox[4][d]);
 end;
-const blowfish_encrypt_block = function(left_block_uint8: number, right_block_uint8: number): (number, number)
+const blowfish_encrypt_block = function(pbox: {[number]: number}, sbox: {[number]: {[number]: number}}, left_block_uint8: number, right_block_uint8: number): (number, number)
 	for i: number = 1, 16 do
 		left_block_uint8 = bit32.bxor(left_block_uint8, pbox[i]);
-		right_block_uint8 = bit32.bxor(right_block_uint8, blowfish_fistel_function(left_block_uint8));
+		right_block_uint8 = bit32.bxor(right_block_uint8, blowfish_fistel_function(sbox, left_block_uint8));
 		left_block_uint8, right_block_uint8 = right_block_uint8, left_block_uint8;
 	end;
 	left_block_uint8, right_block_uint8 = right_block_uint8, left_block_uint8;
@@ -185,62 +181,70 @@ const blowfish_encrypt_block = function(left_block_uint8: number, right_block_ui
 	-- return bit32.bor(left_block_uint8, bit32.lshift(right_block_uint8, 8));
 	return left_block_uint8, right_block_uint8;
 end;
-const blowfish_expand_key_schdule = function(): ()
+const blowfish_expand_key_schdule = function(pbox: {[number]: number}, sbox: {[number]: {[number]: number}}): ()
 	local left_block_uin8: number = 0;
 	local right_block_uint8: number = 0;
 	for i: number = 1, #pbox, 2 do
-		left_block_uin8, right_block_uint8 = blowfish_encrypt_block(left_block_uin8, right_block_uint8);
+		left_block_uin8, right_block_uint8 = blowfish_encrypt_block(pbox, sbox, left_block_uin8, right_block_uint8);
 		pbox[i] = left_block_uin8;
 		pbox[i + 1] = right_block_uint8;
 	end;
 	for s: number = 1, #sbox do
 		for i: number = 1, #sbox[s], 2 do
-			left_block_uin8, right_block_uint8 = blowfish_encrypt_block(left_block_uin8, right_block_uint8);
+			left_block_uin8, right_block_uint8 = blowfish_encrypt_block(pbox, sbox, left_block_uin8, right_block_uint8);
 			sbox[s][i] = left_block_uin8;
 			sbox[s][i + 1] = right_block_uint8;
 		end;
 	end;
 	return;
 end;
-const blowfish_decrypt_block = function(left_uint8: number, right_uint8: number): (number, number)
+const blowfish_decrypt_block = function(pbox: {[number]: number}, sbox: {[number]: {[number]: number}}, left_uint8: number, right_uint8: number): (number, number)
 	for i: number = 18, 3, -1 do
 		left_uint8 = bit32.bxor(left_uint8, pbox[i]);
-		right_uint8 = bit32.bxor(right_uint8, blowfish_fistel_function(left_uint8));
+		right_uint8 = bit32.bxor(right_uint8, blowfish_fistel_function(sbox, left_uint8));
 		left_uint8, right_uint8 = right_uint8, left_uint8;
 	end;
 	left_uint8, right_uint8 = right_uint8, left_uint8;
 	right_uint8 = bit32.bxor(right_uint8, pbox[2]);
 	left_uint8 = bit32.bxor(left_uint8, pbox[1]);
-	--return bit32.bor(right_uint8, bit32.lshift(left_uint8, 8));
 	return left_uint8, right_uint8;
 end;
 const blowfish_encrypt = function(message_buffer: buffer, provided_key_buffer: buffer): buffer
 	const message_buffer_size: number = sizeof(message_buffer);
 	const padded_buffer_size: number = (math.ceil(message_buffer_size / 8) * 8);
-	--print(padded_len);
 	const padded_buffer: buffer = buffer.create(padded_buffer_size);
 	buffer.copy(padded_buffer, 0, message_buffer);
 	const cipher_buffer: buffer = buffer.create(padded_buffer_size);
-	blowfish_key_schdule(provided_key_buffer);
-	blowfish_expand_key_schdule();
+	const pbox: {[number]: number} = table.clone(constant_pbox);
+	const sbox = table.create(#constant_sbox) :: {[number]: {[number]: number}};
+	for i: number = 1, #constant_sbox do
+		sbox[i] = table.clone(constant_sbox[i]);
+	end;
+	blowfish_key_schdule(pbox, provided_key_buffer);
+	blowfish_expand_key_schdule(pbox, sbox);
 	for i: number = 0, (padded_buffer_size - 1), 8 do
 		local left_block_uint32: number = buffer.readu32(padded_buffer, i);
 		local right_block_uint32: number = buffer.readu32(padded_buffer, (i + 4));
-		--print("A?", bit32.bxor(left_block_uint32, right_block_uint32));
-		left_block_uint32, right_block_uint32 = blowfish_encrypt_block(left_block_uint32, right_block_uint32);
+		left_block_uint32, right_block_uint32 = blowfish_encrypt_block(pbox, sbox, left_block_uint32, right_block_uint32);
 		buffer.writeu32(cipher_buffer, i, left_block_uint32);
 		buffer.writeu32(cipher_buffer, (i + 4), right_block_uint32);
 	end;
 	return cipher_buffer;
 end;
-const blowfish_decrypt = function(cipher_buffer: buffer): buffer
-	local cipher_buffer_size: number = sizeof(cipher_buffer);
-	local decrypted_buffer: buffer = buffer.create(cipher_buffer_size);
-	--blowfish_expand_key_schedule(); oops, silly me
+const blowfish_decrypt = function(cipher_buffer: buffer, provided_key_buffer: buffer): buffer
+	const cipher_buffer_size: number = sizeof(cipher_buffer);
+	const decrypted_buffer: buffer = buffer.create(cipher_buffer_size);
+	const pbox: {[number]: number} = table.clone(constant_pbox);
+	const sbox = table.create(#constant_sbox) :: {[number]: {[number]: number}};
+	for i: number = 1, #constant_sbox do
+		sbox[i] = table.clone(constant_sbox[i]);
+	end;
+	blowfish_key_schdule(pbox, provided_key_buffer);
+	blowfish_expand_key_schdule(pbox, sbox);
 	for i: number = 0, (cipher_buffer_size - 1), 8 do
 		local left_block_uint32: number = buffer.readu32(cipher_buffer, i);
 		local right_block_uint32: number = buffer.readu32(cipher_buffer, (i + 4));
-		left_block_uint32, right_block_uint32 = blowfish_decrypt_block(left_block_uint32, right_block_uint32);
+		left_block_uint32, right_block_uint32 = blowfish_decrypt_block(pbox, sbox, left_block_uint32, right_block_uint32);
 		buffer.writeu32(decrypted_buffer, i, left_block_uint32);
 		buffer.writeu32(decrypted_buffer, (i + 4), right_block_uint32);
 	end;
@@ -250,10 +254,14 @@ do
 	const plain_text_buffer: buffer = buffer.fromstring("when she blows on my fish 😳");
 	const key_buffer: buffer = buffer.fromstring("c1b9b00925c6b8e093adec92d98dc75771bc3a84b65e1e0abed6c848c9aae33d");
 	const cipher_buffer: buffer = blowfish_encrypt(plain_text_buffer, key_buffer);
-	print("cipher", buffer.tostring(cipher_buffer));
-	const decrypted_buffer: buffer = blowfish_decrypt(cipher_buffer);
-	print("decrypted", buffer.tostring(decrypted_buffer));
+	warn("cipher", buffer.tostring(cipher_buffer));
+	const decrypted_buffer: buffer = blowfish_decrypt(cipher_buffer, key_buffer);
+	warn("decrypted", buffer.tostring(decrypted_buffer));
+	const failed_decryption_buffer: buffer = blowfish_decrypt(cipher_buffer, buffer.fromstring("this is a very wrong key :C"));
+	warn("failed decrypt", buffer.tostring(failed_decryption_buffer));
 end;
+
+
 
 -- other test thingies:
 
@@ -280,5 +288,5 @@ end;]]
 		left_block_uint32, right_block_uint32 = blowfish_encrypt_block(left_block_uint32, right_block_uint32);
 	end;
 	print(os.clock() - start_time);
-	-- 6.698228999999628, could be improved some time
+	-- 6.128939000000173, could be improved some time
 end;]]
