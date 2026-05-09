@@ -201,7 +201,7 @@ const blowfish_expand_key_schdule = function(): ()
 	end;
 	return;
 end;
-const decrypt_block = function(left_uint8: number, right_uint8: number): (number, number)
+const blowfish_decrypt_block = function(left_uint8: number, right_uint8: number): (number, number)
 	for i: number = 18, 3, -1 do
 		left_uint8 = bit32.bxor(left_uint8, pbox[i]);
 		right_uint8 = bit32.bxor(right_uint8, blowfish_fistel_function(left_uint8));
@@ -239,7 +239,7 @@ const blowfish_decrypt = function(cipher_buffer: buffer): buffer
 	for i: number = 0, (cipher_buffer_size - 1), 8 do
 		local left_block_uint32: number = buffer.readu32(cipher_buffer, i);
 		local right_block_uint32: number = buffer.readu32(cipher_buffer, (i + 4));
-		left_block_uint32, right_block_uint32 = decrypt_block(left_block_uint32, right_block_uint32);
+		left_block_uint32, right_block_uint32 = blowfish_decrypt_block(left_block_uint32, right_block_uint32);
 		buffer.writeu32(decrypted_buffer, i, left_block_uint32);
 		buffer.writeu32(decrypted_buffer, (i + 4), right_block_uint32);
 	end;
